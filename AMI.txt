@@ -1,0 +1,340 @@
+AMI NAME : CS643-Akshay-Jaitly-Namenode
+AMI ID:  ami-ec3bf696
+Region: US East(N. Virginia)
+
+#Steps to build AMI#
+ 
+#Steps to create EC2 instance#
+1. Go to `https://console.aws.amazon.com/ec2/` and click `Launch instances`.
+2. Select `Amazon Linux AMI 2017.09.0 (HVM), SSD Volume Type` which is free tier eligible.
+3. Now, choose instance type as `t2.micro` which is also free tier eligible and provide 1GB memory.
+4. Configure instance details and select number of instances you want to run. I selected four instances as I need to create 4-node-cluster with one Namenode and 3 Datanodes.
+5. Add storage to the instances. I added 8GB.
+6. Add tags to instances so as to uniquely identify them. You can edit these details later.
+7. Configure `security group` for the instances. I named it ‘All’
+8. Click `Review and Launch`. It will take you the last screen where you can see details of the instances.
+9. Click `Launch` and this will ask you to select/create `key/pair` to access your instance. 
+10. Now, Ec2 instances are up and running.
+
+#My Setup:#
+
+#Namenode_public_dns => 
+ec2-54-242-126-151.compute-1.amazonaws.com ip-172-31-31-172
+#Datanode1_public_dns => 
+ec2-34-234-96-218.compute-1.amazonaws.com ip-172-31-24-25
+#Datanode2_public_dns => 
+ec2-52-55-100-168.compute-1.amazonaws.com ip-172-31-20-26
+#Datanode3_public_dns => 
+ec2-34-228-255-72.compute-1.amazonaws.com ip-172-31-18-29
+
+#Change the permission of the key#
+
+local$ sudo chmod 600 ~/.ssh/Cs643-Aks.pem 
+
+Now ssh into the Namenode using the key.
+
+local$ ssh -i ~/.ssh/Cs643-Aks.pem ec2-54-242-126-151.compute-1.amazonaws.com
+
+#SSH Configuration for passwordless login#
+
+Host Namenode
+  HostName ec2-54-242-126-151.compute-1.amazonaws.com
+  User ec2-user
+  IdentityFile ~/.ssh/Cs643-Aks.pem 
+Host Datanode1
+  HostName ec2-34-234-96-218.compute-1.amazonaws.com
+  User ec2-user
+  IdentityFile ~/.ssh/Cs643-Aks.pem 
+Host Datanode2
+  HostName ec2-52-55-100-168.compute-1.amazonaws.com
+  User ec2-user
+  IdentityFile ~/.ssh/Cs643-Aks.pem 
+Host Datanode3
+  HostName  ec2-34-228-255-72.compute-1.amazonaws.com
+  User ec2-user
+  IdentityFile ~/.ssh/Cs643-Aks.pem  
+
+
+
+#Transfer .pem key from local computer to the Namenode#
+
+Local$ scp ~/.ssh/Cs643-Aks.pem  ~/.ssh/config Namenode:~/.ssh
+
+Copy Cs643-Aks.pem and config to all data nodes
+Namenode$ scp ~/.ssh/Cs643-Aks.pem ~/.ssh/config Datanode1:~/.ssh
+Namenode$ scp ~/.ssh/Cs643-Aks.pem ~/.ssh/config Datanode2:~/.ssh
+Namenode$ scp ~/.ssh/Cs643-Aks.pem  ~/.ssh/config Datanode3:~/.ssh
+
+
+Next, SSH into the Namenode and create authorization key
+
+Connect to Namenode by the following command
+
+Local$ ssh Namenode
+
+Most critical step is to change permissions, otherwise it may lead to public key(permission denied)
+
+Namenode$ sudo chmod 600 ~/.ssh/Cs643-Aks.pem 
+
+On the Namenode we can create the public fingerprint, found in ~/.ssh/id_rsa.pub, and add it first to the Namenode’s authorized_keys
+
+Namenode$ ssh-keygen -f ~/.ssh/id_rsa -t rsa -P ""
+
+Namenode$ cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+
+
+Now we need to copy the public fingerprint to each Datanode’s~/.ssh/authorized_keys. This should enable the password-less SSH capabilities from the Namenode to any Datanode.
+
+Namenode$ cat ~/.ssh/id_rsa.pub | ssh Datanode1 'cat >> ~/.ssh/authorized_keys'
+Namenode$ cat ~/.ssh/id_rsa.pub | ssh Datanode2 'cat >> ~/.ssh/authorized_keys'
+Namenode$ cat ~/.ssh/id_rsa.pub | ssh Datanode3 'cat >> ~/.ssh/authorized_keys'
+
+
+We can check this by trying to SSH into any of the Datanodes from the Namenode. You may still be prompted if you are sure you want to connect, but there should be no password requirement.
+
+Namenode$ ssh ec2-user@Datanode1_public_dns
+
+On fresh AWS instances, Java is not installed. We will be installing the openjdk-8-jdk package to be used by Hadoop.
+
+allnodes$ yum  update
+allnodes$ yum list java-*
+
+Then install the lastest version of java.
+allnodes$ sudo yum install java-1.8.0-openjdk*
+
+Then remove any versions of java previously installed, in my case 
+allnodes$ sudo yum remove java-1.7.0-*
+
+Next we’ll install Hadoop onto all the nodes by first saving the binary tar files to ~/Downloads and extracting it to the /usr/local folder.
+
+allnodes$ wget http://mirrors.ibiblio.org/apache/hadoop/common/hadoop-2.7.4/hadoop-2.7.4.tar.gz -P ~/Downloads
+
+allnodes$ sudo tar zxvf ~/Downloads/hadoop-* -C /usr/local
+allnodes$ sudo mv /usr/local/hadoop-* /usr/local/hadoop
+
+#Environment Variables#
+
+Now we’ll need to add some Hadoop and Java environment variables to ~/.profile and source them to the current shell session.
+
+allnodes$ sudo nano ~/.profile
+
+#Hadoop Env Variables
+
+export JAVA_HOME=/usr
+export PATH=$PATH:$JAVA_HOME/bin
+export HADOOP_HOME=/usr/local/hadoop
+export PATH=$PATH:$HADOOP_HOME/bin
+export HADOOP_CONF_DIR=/usr/local/hadoop/etc/hadoop
+
+
+Then load these environment variables by sourcing the profile
+
+allnodes$ source ~/.profile
+
+Change ownership of the hadoop folder.
+
+allnodes$ sudo chown -R ec2-user /usr/local/hadoop
+
+#Common Hadoop Configurations on all Nodes#
+
+1.$HADOOP_CONF_DIR/hadoop-env.sh:
+
+allnodes$ sudo nano $HADOOP_CONF_DIR/hadoop-env.sh
+
+
+Simply replace${JAVA_HOME} with /usr which is where Java was just previously installed.
+
+export JAVA_HOME=/usr
+
+
+2.$HADOOP_CONF_DIR/core-site.xml:
+
+allnodes$ sudo nano $HADOOP_CONF_DIR/core-site.xml
+
+
+<configuration>
+  <property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://ec2-54-242-126-151.compute-1.amazonaws.com:9000</value>
+  </property>
+</configuration>
+
+3.$HADOOP_CONF_DIR/yarn-site.xml:
+
+allnodes$ sudo nano $HADOOP_CONF_DIR/yarn-site.xml
+
+<configuration>
+<! — Site specific YARN configuration properties →
+  <property>
+    <name>yarn.nodemanager.resource.memory-mb</name>
+    <value>3096</value>
+  </property>
+  <property>
+    <name>yarn.nodemanager.aux-services</name>
+    <value>mapreduce_shuffle</value>
+  </property> 
+  <property>
+    <name>yarn.nodemanager.aux-services.mapreduce.shuffle.class</name>
+    <value>org.apache.hadoop.mapred.ShuffleHandler</value>
+  </property>
+  <property>
+    <name>yarn.resourcemanager.hostname</name>
+    <value>ec2-54-242-126-151.compute-1.amazonaws.com</value>
+  </property>
+</configuration>
+
+# Note in this step it is highly essential
+
+4.$HADOOP_CONF_DIR/mapred-site.xml:
+
+The last configuration file to change is the $HADOOP_CONF_DIR/mapred-site.xml. We will first need to make a copy of the template and rename it.
+
+allnodes$ sudo cp $HADOOP_CONF_DIR/mapred-site.xml.template $HADOOP_CONF_DIR/mapred-site.xml
+
+allnodes$ sudo nano $HADOOP_CONF_DIR/mapred-site.xml
+
+<configuration>
+  <property>
+    <name>mapreduce.jobtracker.address</name>
+    <value>ec2-54-242-126-151.compute-1.amazonaws.com:54311</value>
+  </property>
+  <property>
+    <name>mapreduce.framework.name</name>
+    <value>yarn</value>
+  </property>
+</configuration>
+
+#Namenode Specific Configurations#
+
+Start with adding to the hosts file located under /etc/hosts. We will need to add each node’s public DNS and hostname to the list. The hostname can be found with the following
+
+allnodes$ echo $(hostname)
+
+Go to /etc/hosts and enter the following:
+Namenode$ sudo nano /etc/hosts
+
+127.0.0.1 localhost
+ec2-54-242-126-151.compute-1.amazonaws.com ip-172-31-31-172
+ec2-34-234-96-218.compute-1.amazonaws.com ip-172-31-24-25
+ec2-52-55-100-168.compute-1.amazonaws.com ip-172-31-20-26
+ec2-34-228-255-72.compute-1.amazonaws.com ip-172-31-18-29
+
+# The following lines are desirable for IPv6 capable hosts
+::1 ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+ff02::3 ip6-allhosts
+
+$HADOOP_CONF_DIR/hdfs-site.xml:
+
+We can now modify the $HADOOP_CONF_DIR/hdfs-site.xml file to specify the replication factor along with where the Namenode data will reside
+
+Namenode$ sudo nano $HADOOP_CONF_DIR/hdfs-site.xml
+
+
+<configuration>
+  <property>
+    <name>dfs.replication</name>
+    <value>3</value>
+  </property>
+  <property>
+    <name>dfs.Namenode.name.dir</name>
+    <value>file:///usr/local/hadoop/hadoop_data/hdfs/Namenode</value>
+  </property>
+</configuration>
+
+
+The current path where data on the Namenode will reside does not exist, so we’ll need to make this before starting HDFS.
+
+Namenode$ sudo mkdir -p $HADOOP_HOME/hadoop_data/hdfs/Namenode
+
+Next we’ll need to add a masters file to the $HADOOP_CONF_DIR directory
+
+Namenode$ sudo touch $HADOOP_CONF_DIR/masters
+
+then insert the Namenode’s hostname in that file
+
+Namenode$ sudo nano $HADOOP_CONF_DIR/masters
+
+172-31-31-172
+
+Also modify the Slaves file and insert the host names of data nodes 1, 2 & 3.
+
+Namenode$ sudo nano $HADOOP_CONF_DIR/slaves
+
+172-31-24-25
+172-31-20-26
+172-31-18-29
+
+
+Now we will change the ownership of the $HADOOP_HOME directory to the user ec2-user
+
+Namenode$ sudo chown -R ec2-user $HADOOP_HOME
+
+
+#Datanode Specific Configurations:#
+
+
+1.$HADOOP_CONF_DIR/hdfs-site.xml:
+
+Datanodes$ sudo nano $HADOOP_CONF_DIR/hdfs-site.xml
+
+
+<configuration>
+  <property>
+    <name>dfs.replication</name>
+    <value>3</value>
+  </property>
+  <property>
+    <name>dfs.Datanode.data.dir</name>
+    <value>file:///usr/local/hadoop/hadoop_data/hdfs/Datanode</value>
+  </property>
+</configuration>
+
+Now we will need to create the directory specified in the $HADOOP_CONF_DIR/hdfs-site.xml file.
+
+Datanodes$ sudo mkdir -p $HADOOP_HOME/hadoop_data/hdfs/Datanode
+
+Now that all configurations are set on the Datanode, we will change the ownership of the$HADOOP_HOME directory to the ec2-user user
+
+Datanodes $ sudo chown -R ec2-user $HADOOP_HOME
+
+Start Hadoop Cluster:
+
+We can now start up HDFS from the Namenode by first formatting it and then starting HDFS.
+
+Namenode$ hdfs Namenode –format
+
+Namenode$ $HADOOP_HOME/sbin/start-dfs.sh
+
+You can go to ec2-54-242-126-151.compute-1.amazonaws.com:50070 in your browser to check if all Datanodes are online. If the webUI does not display, check to make sure your EC2 instances have security group settings that include All Traffic and not just SSH. You should see 3 live nodes, otherwise there was an error in the previous steps.
+
+Now let’s start up YARN as well as the MapReduce JobHistory Server.
+
+Namenode$ $HADOOP_HOME/sbin/start-yarn.sh
+Namenode$ $HADOOP_HOME/sbin/mr-jobhistory-daemon.sh start historyserver
+
+You can check to make sure all Java processes are running with the jps command on the Namenode and Datanodes
+
+#Note : If jps does not start, sudo yum install ant
+ 
+Namenode$ jps
+3385 Namenode
+7373 Jps
+4911 Secondary Namenode
+4123 JobHistoryServer
+4399 ResourceManager
+
+Datanode$ jps
+13765 Jps
+9350 NodeManager
+23238 Datanode
+
+#Steps to install create AMI and store it#
+Go to your running instances and select the `Namenode` or instance in which we installed hadoop/java.
+Select Image-->Create
+I also backed up my Datanode
+AMI NAME : CS-Akshay-Jaitly-Datanode
+AMI NAME : CS643-Akshay-Jaitly-Namenode
